@@ -4,16 +4,17 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from docx import Document
 import math
+import os
 
+# ================== НАСТРОЙКИ ==================
+TOKEN = os.getenv("TOKEN")  # Telegram токен
 UNIVERSITY_CENTER = (41.351376, 69.221844)  # центр университета
 ALLOWED_RADIUS = 100  # метров
 # ===============================================
 
 # USERS: username -> {"name": ФИО, "role": "student"/"leader"}
 USERS = {
-    # пример
-    # "drvzeen": {"name": "Шухрат Шоха", "role": "student"},
-    # "mygirl": {"name": "Моя девушка", "role": "leader"},
+    # Пример: "drvzeen": {"name": "Шухрат Шоха", "role": "student"},
 }
 
 attendance = {}  # словарь посещаемости по датам
@@ -22,7 +23,6 @@ logging.basicConfig(level=logging.INFO)
 
 # ================== ФУНКЦИИ ==================
 def distance(coord1, coord2):
-    """Вычисляет расстояние в метрах между двумя координатами (lat, lon)"""
     R = 6371000
     lat1, lon1 = map(math.radians, coord1)
     lat2, lon2 = map(math.radians, coord2)
@@ -105,7 +105,6 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = f"attendance_{today}.docx"
     doc.save(filename)
     await update.message.reply_document(open(filename, "rb"))
-    import os
     os.remove(filename)
 
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,7 +112,7 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_leader(username):
         return await update.message.reply_text("Только лидер может добавлять пользователей.")
     try:
-        args = context.args  # username ФИО role
+        args = context.args
         if len(args) < 3:
             return await update.message.reply_text("Используй: /add_student username ФИО role")
         new_username = args[0]
@@ -145,6 +144,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{name}, твой статус сегодня: {status_today}")
 
 # ================== MAIN ==================
+def main():
+    app = Application.builder().token(TOKEN).build()
 
     # команды
     app.add_handler(CommandHandler("start", start))
