@@ -1,37 +1,50 @@
 import logging
 from datetime import datetime
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from docx import Document
 import math
 import os
+import json
 
 # ================== НАСТРОЙКИ ==================
-# Берём токен из переменных окружения. Это безопасный способ.
-TOKEN = os.getenv("TOKEN") 
-# Координаты центра университета для проверки местоположения.
-UNIVERSITY_CENTER = (41.351376, 69.221844)  
-# Разрешённый радиус (в метрах) для отметки присутствия.
-ALLOWED_RADIUS = 100  
-# ===============================================
+TOKEN = os.getenv("TOKEN")
+UNIVERSITY_CENTER = (41.351376, 69.221844)
+ALLOWED_RADIUS = 100
+
+USERS_FILE = "users.json"
+ATTENDANCE_FILE = "attendance.json"
 
 # USERS: username -> {"name": ФИО, "role": "student"/"leader"}
-# Внимание: эти данные будут сброшены при каждом перезапуске бота.
-# Для постоянного хранения нужен файл или база данных.
-USERS = {}  
-
-# Словарь для хранения отметок посещаемости.
-attendance = {}  
+USERS = {}
+attendance = {}
 
 logging.basicConfig(level=logging.INFO)
 
 # ================== ФУНКЦИИ-ПОМОЩНИКИ ==================
+def load_data():
+    """Загружает данные пользователей и посещаемости из JSON-файлов."""
+    global USERS, attendance
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, "r") as f:
+                USERS = json.load(f)
+        if os.path.exists(ATTENDANCE_FILE):
+            with open(ATTENDANCE_FILE, "r") as f:
+                attendance = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+def save_data():
+    """Сохраняет данные пользователей и посещаемости в JSON-файлы."""
+    with open(USERS_FILE, "w") as f:
+        json.dump(USERS, f, indent=4)
+    with open(ATTENDANCE_FILE, "w") as f:
+        json.dump(attendance, f, indent=4)
+
 def distance(coord1, coord2):
-    """
-    Вычисляет расстояние между двумя координатами (широта, долгота) в метрах,
-    используя формулу Гаверсина.
-    """
-    R = 6371000 # Радиус Земли в метрах
+    """Вычисляет расстояние между двумя координатами."""
+    R = 6371000
     lat1, lon1 = map(math.radians, coord1)
     lat2, lon2 = map(math.radians, coord2)
     dlat = lat2 - lat1
@@ -48,86 +61,56 @@ def is_student(username):
     """Проверяет, является ли пользователь студентом."""
     return username in USERS and USERS[username]["role"] == "student"
 
-import json
-
-USERS_FILE = "users.json"
-ATTENDANCE_FILE = "attendance.json"
-
-def load_data():
-    """Загружает данные пользователей и посещаемости из JSON-файлов."""
-    global USERS, attendance
-    try:
-        if os.path.exists(USERS_FILE):
-            with open(USERS_FILE, "r") as f:
-                USERS = json.load(f)
-        if os.path.exists(ATTENDANCE_FILE):
-            with open(ATTENDANCE_FILE, "r") as f:
-                attendance = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Если файлы не найдены или повреждены, просто начнём с пустых данных.
-        pass
-
-def save_data():
-    """Сохраняет данные пользователей и посещаемости в JSON-файлы."""
-    with open(USERS_FILE, "w") as f:
-        json.dump(USERS, f, indent=4)
-    with open(ATTENDANCE_FILE, "w") as f:
-        json.dump(attendance, f, indent=4)
 # ================== КОМАНДЫ ДЛЯ БОТА ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет приветственное сообщение при вызове /start."""
+    """Отправляет приветственное сообщение и просит геолокацию, если пользователь зарегистрирован."""
     user = update.message.from_user
+    username = user.username
+    
+    if username is None or not is_student(username):
+        await update.message.reply_text(
+            f"Привет, {user.first_name}!\n"
+            f"Чтобы пользоваться ботом, вам необходимо установить @username в настройках Telegram и попросить лидера группы добавить вас."
+        )
+        return
+    
+    keyboard = [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
     await update.message.reply_text(
         f"Привет, {user.first_name}! 👋\n"
-        f"Отправь '+' если ты на паре, '-' если нет.\n"
-        f"Можно отправить геолокацию для подтверждения.\n"
-        f"Используй /help для списка команд."
+        f"Чтобы отметить посещаемость, пожалуйста, поделись своей геолокацией, нажав на кнопку ниже."
+    )
+    
+    await update.message.reply_text(
+        "Нажми на кнопку:",
+        reply_markup=reply_markup
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет список доступных команд."""
     username = update.message.from_user.username
     if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username в настройках Telegram, чтобы использовать этот бот.")
-    text = "Команды для всех:\n/start\n/help\n+ / -\nГеолокация"
+        return await update.message.reply_text("Пожалуйста, установите @username.")
+    
+    text = "Команды для всех:\n/start - начать\n/help - список команд"
     if is_leader(username):
         text += "\n\nКоманды для лидера:\n/report - сгенерировать отчёт\n/add_student <username> <ФИО> <role> - добавить пользователя\n/list_students - посмотреть список"
     elif is_student(username):
         text += "\n\nКоманды для студента:\n/status - узнать свой статус"
     await update.message.reply_text(text)
 
-async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые отметки '+' и '-'."""
-    username = update.message.from_user.username
-    if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username.")
-    
-    text = update.message.text.strip()
-    
-    if not is_student(username):
-        return await update.message.reply_text("Ты не в списке студентов.")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    if today not in attendance:
-        attendance[today] = {}
-        
-    if text in ["+", "-"]:
-        attendance[today][USERS[username]["name"]] = text
-        await update.message.reply_text(f"Отметка сохранена: {text}")
-    else:
-        await update.message.reply_text("Используй только '+' или '-'")
-
 async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает геолокацию пользователя."""
     username = update.message.from_user.username
-    if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username.")
+    if username is None or not is_student(username):
+        return await update.message.reply_text(
+            "Ты не в списке студентов или у тебя нет @username.",
+            reply_markup=ReplyKeyboardRemove()
+        )
     
     loc = update.message.location
-    if not is_student(username):
-        return await update.message.reply_text("Ты не в списке студентов.")
-    
     user_coords = (loc.latitude, loc.longitude)
     dist = distance(user_coords, UNIVERSITY_CENTER)
     
@@ -135,70 +118,16 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if today not in attendance:
         attendance[today] = {}
     
+    name = USERS[username]["name"]
+    
     if dist <= ALLOWED_RADIUS:
-        attendance[today][USERS[username]["name"]] = "+"
-        await update.message.reply_text("Ты в университете ✅")
+        attendance[today][name] = "+"
+        await update.message.reply_text("Ты в университете ✅", reply_markup=ReplyKeyboardRemove())
     else:
-        attendance[today][USERS[username]["name"]] = "-"
-        await update.message.reply_text("Ты не в университете ❌")
-
-async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Обрабатывает текстовые отметки '+' и '-'.
-    Эта функция больше не используется для отметки,
-    если вы хотите, чтобы только геолокация работала.
-    """
-    # Этот код теперь не будет выполняться, если вы закомментируете обработчик
-    # в функции main().
-    username = update.message.from_user.username
-    if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username.")
+        attendance[today][name] = "-"
+        await update.message.reply_text("Ты не в университете ❌", reply_markup=ReplyKeyboardRemove())
     
-    text = update.message.text.strip()
-    
-    if not is_student(username):
-        return await update.message.reply_text("Ты не в списке студентов.")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    if today not in attendance:
-        attendance[today] = {}
-        
-    if text in ["+", "-"]:
-        attendance[today][USERS[username]["name"]] = text
-        save_data()
-        await update.message.reply_text(f"Отметка сохранена: {text}")
-    else:
-        await update.message.reply_text("Используй только '+' или '-'")
-
-# ... (ваш код)
-    
-# ================== ЗАПУСК БОТА ==================
-def main():
-    """Основная функция для запуска бота."""
-    if TOKEN is None:
-        logging.error("Telegram bot token not found. Set the 'TOKEN' environment variable.")
-        return
-    
-    load_data()
-    
-    app = Application.builder().token(TOKEN).build()
-
-    # Обработчики команд
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("report", report))
-    app.add_handler(CommandHandler("add_student", add_student))
-    app.add_handler(CommandHandler("list_students", list_students))
-    app.add_handler(CommandHandler("status", status))
-
-    # Обработчики сообщений
-    # Закомментируйте или удалите эту строку, чтобы отключить ручной ввод "+" и "-".
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mark_attendance))
-    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
-
-    logging.info("Бот запущен. Ожидание команд...")
-    app.run_polling()
-
+    save_data()
 
 # ================== ЛИДЕРСКИЕ КОМАНДЫ ==================
 
@@ -214,10 +143,10 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     doc = Document()
     doc.add_heading(f"Отчёт за {today}", 0)
-    for user in USERS.values():
-        if user["role"] == "student":
-            status = attendance[today].get(user["name"], "Не отмечен")
-            doc.add_paragraph(f"{user['name']}: {status}")
+    for user_data in USERS.values():
+        if user_data["role"] == "student":
+            status = attendance[today].get(user_data["name"], "Не отмечен")
+            doc.add_paragraph(f"{user_data['name']}: {status}")
             
     filename = f"attendance_{today}.docx"
     doc.save(filename)
@@ -228,7 +157,9 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Добавляет нового пользователя (студента или лидера)."""
     username = update.message.from_user.username
-    # Исправленная логика: разрешаем добавлять первого пользователя, если USERS пуст
+    if username is None:
+        return await update.message.reply_text("Пожалуйста, установите @username.")
+
     if not is_leader(username) and len(USERS) > 0:
         return await update.message.reply_text("Только лидер может добавлять пользователей.")
     
@@ -238,14 +169,14 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Используй: /add_student <username> <ФИО> <role>")
             
         new_username = args[0]
-        # Собираем ФИО, если оно состоит из нескольких слов
         name = " ".join(args[1:-1]) 
-        role = args[-1].lower() # Преобразуем роль в нижний регистр для единообразия
+        role = args[-1].lower()
         
         if role not in ["student", "leader"]:
             return await update.message.reply_text("Роль должна быть student или leader")
             
         USERS[new_username] = {"name": name, "role": role}
+        save_data()
         await update.message.reply_text(f"{name} ({role}) добавлен!")
         
     except Exception as e:
@@ -269,8 +200,8 @@ async def list_students(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает студенту его текущий статус посещаемости."""
     username = update.message.from_user.username
-    if not is_student(username):
-        return await update.message.reply_text("Ты не в списке студентов.")
+    if username is None or not is_student(username):
+        return await update.message.reply_text("Ты не в списке студентов или у тебя нет @username.")
         
     today = datetime.now().strftime("%Y-%m-%d")
     name = USERS[username]["name"]
@@ -284,8 +215,8 @@ def main():
     if TOKEN is None:
         logging.error("Telegram bot token not found. Set the 'TOKEN' environment variable.")
         return
-    
-    load_data() # <-- Добавьте эту строку, чтобы загрузить данные при запуске
+        
+    load_data()
     
     app = Application.builder().token(TOKEN).build()
 
@@ -297,8 +228,7 @@ def main():
     app.add_handler(CommandHandler("list_students", list_students))
     app.add_handler(CommandHandler("status", status))
 
-    # Обработчики сообщений
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mark_attendance))
+    # Обработчик сообщений (только для геолокации)
     app.add_handler(MessageHandler(filters.LOCATION, location_handler))
 
     logging.info("Бот запущен. Ожидание команд...")
