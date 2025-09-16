@@ -4,9 +4,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from docx import Document
 import math
-
+import os
 # ================== НАСТРОЙКИ ==================
-TOKEN = "ВАШ_ТОКЕН"  # вставь сюда токен бота
+TOKEN = os.getenv("ТОКЕН")  # вставь сюда токен бота
 UNIVERSITY_CENTER = (41.351376, 69.221844)  # центр университета
 ALLOWED_RADIUS = 100  # метров
 # ===============================================
