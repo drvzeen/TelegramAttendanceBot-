@@ -145,8 +145,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{name}, твой статус сегодня: {status_today}")
 
 # ================== MAIN ==================
-def main():
-    app = Application.builder().token(TOKEN).build()
 
     # команды
     app.add_handler(CommandHandler("start", start))
