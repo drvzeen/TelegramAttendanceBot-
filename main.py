@@ -73,33 +73,18 @@ def save_data():
         json.dump(USERS, f, indent=4)
     with open(ATTENDANCE_FILE, "w") as f:
         json.dump(attendance, f, indent=4)
-
 # ================== КОМАНДЫ ДЛЯ БОТА ==================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет приветственное сообщение при вызове /start."""
-    user = update.message.from_user
-    await update.message.reply_text(
-        f"Привет, {user.first_name}! 👋\n"
-        f"Отправь '+' если ты на паре, '-' если нет.\n"
-        f"Можно отправить геолокацию для подтверждения.\n"
-        f"Используй /help для списка команд."
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет список доступных команд."""
-    username = update.message.from_user.username
-    if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username в настройках Telegram, чтобы использовать этот бот.")
-    text = "Команды для всех:\n/start\n/help\n+ / -\nГеолокация"
-    if is_leader(username):
-        text += "\n\nКоманды для лидера:\n/report - сгенерировать отчёт\n/add_student <username> <ФИО> <role> - добавить пользователя\n/list_students - посмотреть список"
-    elif is_student(username):
-        text += "\n\nКоманды для студента:\n/status - узнать свой статус"
-    await update.message.reply_text(text)
+# ... (ваш код)
 
 async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые отметки '+' и '-'."""
+    """
+    Обрабатывает текстовые отметки '+' и '-'.
+    Эта функция больше не используется для отметки,
+    если вы хотите, чтобы только геолокация работала.
+    """
+    # Этот код теперь не будет выполняться, если вы закомментируете обработчик
+    # в функции main().
     username = update.message.from_user.username
     if username is None:
         return await update.message.reply_text("Пожалуйста, установите @username.")
@@ -115,33 +100,40 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     if text in ["+", "-"]:
         attendance[today][USERS[username]["name"]] = text
+        save_data()
         await update.message.reply_text(f"Отметка сохранена: {text}")
     else:
         await update.message.reply_text("Используй только '+' или '-'")
 
-async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает геолокацию пользователя."""
-    username = update.message.from_user.username
-    if username is None:
-        return await update.message.reply_text("Пожалуйста, установите @username.")
+# ... (ваш код)
     
-    loc = update.message.location
-    if not is_student(username):
-        return await update.message.reply_text("Ты не в списке студентов.")
+# ================== ЗАПУСК БОТА ==================
+def main():
+    """Основная функция для запуска бота."""
+    if TOKEN is None:
+        logging.error("Telegram bot token not found. Set the 'TOKEN' environment variable.")
+        return
     
-    user_coords = (loc.latitude, loc.longitude)
-    dist = distance(user_coords, UNIVERSITY_CENTER)
+    load_data()
     
-    today = datetime.now().strftime("%Y-%m-%d")
-    if today not in attendance:
-        attendance[today] = {}
-    
-    if dist <= ALLOWED_RADIUS:
-        attendance[today][USERS[username]["name"]] = "+"
-        await update.message.reply_text("Ты в университете ✅")
-    else:
-        attendance[today][USERS[username]["name"]] = "-"
-        await update.message.reply_text("Ты не в университете ❌")
+    app = Application.builder().token(TOKEN).build()
+
+    # Обработчики команд
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("report", report))
+    app.add_handler(CommandHandler("add_student", add_student))
+    app.add_handler(CommandHandler("list_students", list_students))
+    app.add_handler(CommandHandler("status", status))
+
+    # Обработчики сообщений
+    # Закомментируйте или удалите эту строку, чтобы отключить ручной ввод "+" и "-".
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mark_attendance))
+    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
+
+    logging.info("Бот запущен. Ожидание команд...")
+    app.run_polling()
+
 
 # ================== ЛИДЕРСКИЕ КОМАНДЫ ==================
 
